@@ -13,6 +13,7 @@ URL = "http://r.sf-misis.ru/group/3831"
 SUBJECT_SHORTENINGS = {
     "Компьютерное обеспечение специальности (Лабораторная работа)": "КОС (Лабораторная работа)",
     "Информатика Некрасова 1/205 (Лабораторная работа)": "Информатика (Лабораторная работа)",
+    "Основы российской государственности (Лекция)": "ОРГ (Лекция)",
 }
 
 # Включаем логирование
@@ -23,101 +24,108 @@ logger = logging.getLogger(__name__)
 def shorten_subject(subject_text):
     """Сокращает название предмета по словарю"""
     for full_name, short_name in SUBJECT_SHORTENINGS.items():
-        if full_name in subject_text:
+        if full_name == subject_text:
             return short_name
     return subject_text  # Возвращаем оригинал, если сокращение не найдено
 
 
 def get_fresh_schedule():
-    """Получает свежее расписание с сайта"""
+    """Получает свежее расписание с сайта и парсит его"""
     try:
         response = requests.get(URL, timeout=10)
         response.encoding = 'utf-8'
         soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Находим контейнер с элементами расписания
         session_items_div = soup.find('div', class_='session-items')
 
+        schedule = {}
+
         if session_items_div:
-            return session_items_div.get_text(strip=False, separator='\n')
-        return ""
+            # Находим все элементы расписания
+            session_items = session_items_div.find_all('div', class_='session-item')
+
+            for item in session_items:
+                try:
+                    # Извлекаем название предмета
+                    subject_elem = item.find('div', class_='session-lesson-name')
+                    if not subject_elem:
+                        continue
+
+                    subject = subject_elem.get_text(strip=True)
+                    short_subject = shorten_subject(subject)
+
+                    # Извлекаем дату и время
+                    info_elem = item.find('div', class_='result-item-info')
+                    if info_elem:
+                        info_text = info_elem.get_text(strip=True)
+                        if ', с ' in info_text:
+                            date_part, time_part = info_text.split(', с ', 1)
+                            date = date_part.strip()
+                            time = f"с {time_part.strip()}"
+                        else:
+                            date = info_text
+                            time = ""
+                    else:
+                        date = ""
+                        time = ""
+
+                    # Извлекаем аудиторию и преподавателя
+                    additional_elem = item.find('div', class_='result-item-additional')
+                    room = ""
+                    teacher = ""
+
+                    if additional_elem:
+                        additional_text = additional_elem.get_text(strip=True)
+                        if ',' in additional_text:
+                            room_part, teacher_part = additional_text.split(',', 1)
+                            room = room_part.strip()
+                            teacher = teacher_part.strip()
+                        else:
+                            room = additional_text
+
+                    # Добавляем в расписание
+                    if date:
+                        if date not in schedule:
+                            schedule[date] = []
+
+                        schedule[date].append({
+                            'subject': short_subject,
+                            'date': date,
+                            'time': time,
+                            'room': room,
+                            'teacher': teacher
+                        })
+
+                except Exception as e:
+                    logger.warning(f"Ошибка при парсинге элемента расписания: {e}")
+                    continue
+
+        return schedule
+
     except Exception as e:
         logger.error(f"Ошибка при получении расписания: {e}")
-        return ""
-
-
-def parse_schedule(text):
-    """Парсит текст расписания и группирует по дням"""
-    if not text:
         return {}
-
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
-    schedule = {}
-    current_entry = {}
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-
-        if '(' in line and ')' in line and line.endswith(')'):
-            if current_entry and 'subject' in current_entry:
-                date = current_entry['date']
-                if date not in schedule:
-                    schedule[date] = []
-                schedule[date].append(current_entry.copy())
-
-            # Сокращаем название предмета
-            short_subject = shorten_subject(line)
-            current_entry = {'subject': short_subject}
-
-            if i + 1 < len(lines):
-                i += 1
-                date_time_line = lines[i]
-
-                if ',' in date_time_line and 'с ' in date_time_line:
-                    date_part, time_part = date_time_line.split(', с ')
-                    current_entry['date'] = date_part.strip()
-                    current_entry['time'] = f"с {time_part.strip()}"
-
-            if i + 1 < len(lines):
-                i += 1
-                room_teacher = lines[i]
-
-                if ',' in room_teacher:
-                    room, teacher = room_teacher.split(',', 1)
-                    current_entry['room'] = room.strip()
-                    current_entry['teacher'] = teacher.strip()
-                else:
-                    current_entry['room'] = room_teacher
-                    current_entry['teacher'] = ""
-
-        i += 1
-
-    if current_entry and 'subject' in current_entry:
-        date = current_entry['date']
-        if date not in schedule:
-            schedule[date] = []
-        schedule[date].append(current_entry.copy())
-
-    return schedule
 
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает расписание на сегодня"""
     # Получаем свежие данные
-    text = get_fresh_schedule()
-    if not text:
+    schedule = get_fresh_schedule()
+    if not schedule:
         await update.message.reply_text("❌ Не удалось загрузить расписание. Попробуй позже.")
         return
 
-    schedule = parse_schedule(text)
     today_str = datetime.now().strftime('%d.%m.%Y')
 
-    # Форматируем результат
     if today_str in schedule:
-        day_schedule = sorted(schedule[today_str], key=lambda x: x['time'])
+        day_schedule = schedule[today_str]
+        # Сортируем по времени
+        day_schedule_sorted = sorted(day_schedule, key=lambda x: x['time'])
 
-        result = f"*Расписание на {today_str}*\n\n"
+        result = f"*Расписание на сегодня ({today_str})*\n\n"
 
-        for entry in day_schedule:
+        for entry in day_schedule_sorted:
             time = entry['time'].replace('с ', '').replace(' до ', '-')
             subject = entry['subject']
             room = entry.get('room', '')
@@ -128,7 +136,7 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result += f" {room}\n"
             result += "\n"
     else:
-        result = f" *Сегодня ({today_str})*\n\n"
+        result = f"*Сегодня ({today_str})*\n\n"
         result += " Занятий нет!\n\n"
         result += "Кайфуем братья!😊"
 
@@ -138,21 +146,21 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает расписание на завтра"""
     # Получаем свежие данные
-    text = get_fresh_schedule()
-    if not text:
+    schedule = get_fresh_schedule()
+    if not schedule:
         await update.message.reply_text("❌ Не удалось загрузить расписание. Попробуйте позже.")
         return
 
-    schedule = parse_schedule(text)
     tomorrow_str = (datetime.now() + timedelta(days=1)).strftime('%d.%m.%Y')
 
-    # Форматируем результат
     if tomorrow_str in schedule:
-        day_schedule = sorted(schedule[tomorrow_str], key=lambda x: x['time'])
+        day_schedule = schedule[tomorrow_str]
+        # Сортируем по времени
+        day_schedule_sorted = sorted(day_schedule, key=lambda x: x['time'])
 
-        result = f"*Расписание на {tomorrow_str}*\n\n"
+        result = f"*Расписание на завтра ({tomorrow_str})*\n\n"
 
-        for entry in day_schedule:
+        for entry in day_schedule_sorted:
             time = entry['time'].replace('с ', '').replace(' до ', '-')
             subject = entry['subject']
             room = entry.get('room', '')
@@ -163,8 +171,8 @@ async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result += f" {room}\n"
             result += "\n"
     else:
-        result = f" *Завтра ({tomorrow_str})*\n\n"
-        result += "✅ Занятий нет!\n\n"
+        result = f"*Завтра ({tomorrow_str})*\n\n"
+        result += " Занятий нет!\n\n"
         result += "Всем золотой сваги!☺️"
 
     await update.message.reply_text(result, parse_mode='Markdown')
