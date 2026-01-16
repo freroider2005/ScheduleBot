@@ -6,12 +6,26 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 import logging
 
 # Настройки
-TOKEN = "7986423255:AAENVKeAv68TnOC2wnZF7l3PUmuWpt_SjYs"  # Получите у @BotFather
+TOKEN = "8450976313:AAHUlP-RmlhMoILJvqoEiCh9-Reygst0dXk"
 URL = "http://r.sf-misis.ru/group/3831"
+
+# Словарь сокращений для предметов
+SUBJECT_SHORTENINGS = {
+    "Компьютерное обеспечение специальности (Лабораторная работа)": "КОС (Лабораторная работа)",
+    "Информатика Некрасова 1/205 (Лабораторная работа)": "Информатика (Лабораторная работа)",
+}
 
 # Включаем логирование
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def shorten_subject(subject_text):
+    """Сокращает название предмета по словарю"""
+    for full_name, short_name in SUBJECT_SHORTENINGS.items():
+        if full_name in subject_text:
+            return short_name
+    return subject_text  # Возвращаем оригинал, если сокращение не найдено
 
 
 def get_fresh_schedule():
@@ -50,7 +64,9 @@ def parse_schedule(text):
                     schedule[date] = []
                 schedule[date].append(current_entry.copy())
 
-            current_entry = {'subject': line}
+            # Сокращаем название предмета
+            short_subject = shorten_subject(line)
+            current_entry = {'subject': short_subject}
 
             if i + 1 < len(lines):
                 i += 1
@@ -86,8 +102,6 @@ def parse_schedule(text):
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает расписание на сегодня"""
-    await update.message.reply_text("🔄 Загрузка расписания на сегодня...")
-
     # Получаем свежие данные
     text = get_fresh_schedule()
     if not text:
@@ -101,7 +115,7 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if today_str in schedule:
         day_schedule = sorted(schedule[today_str], key=lambda x: x['time'])
 
-        result = f"*Расписание на сегодня ({today_str})*\n\n"
+        result = f"*Расписание на {today_str}*\n\n"
 
         for entry in day_schedule:
             time = entry['time'].replace('с ', '').replace(' до ', '-')
@@ -123,8 +137,6 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает расписание на завтра"""
-    await update.message.reply_text("🔄 Загрузка расписания на завтра...")
-
     # Получаем свежие данные
     text = get_fresh_schedule()
     if not text:
@@ -138,7 +150,7 @@ async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if tomorrow_str in schedule:
         day_schedule = sorted(schedule[tomorrow_str], key=lambda x: x['time'])
 
-        result = f"*Расписание на завтра ({tomorrow_str})*\n\n"
+        result = f"*Расписание на {tomorrow_str}*\n\n"
 
         for entry in day_schedule:
             time = entry['time'].replace('с ', '').replace(' до ', '-')
